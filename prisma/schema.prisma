@@ -1,0 +1,117 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id         Int      @id @default(autoincrement())
+  telegramId Int      @unique
+  firstName  String?
+  lastName   String?
+  username   String?
+  role       Role     @default(USER)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Связи
+  tickets Ticket[]
+  cars    Car[]
+}
+
+model Car {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brand            String // марка (Toyota, BMW...)
+  model            String // модель (Camry, X5...)
+  governmentNumber String   @unique // госномер (А777АА77)
+  color            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Связи
+  tickets Ticket[]
+
+  @@index([userId])
+  @@index([governmentNumber])
+}
+
+model Service {
+  id          Int      @id @default(autoincrement())
+  name        String // название услуги
+  description String? // описание
+  basePrice   Decimal  @db.Decimal(10, 2) // базовая цена
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Связи
+  ticketServices TicketService[]
+}
+
+model Ticket {
+  id     Int  @id @default(autoincrement())
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  carId  Int?
+  car    Car? @relation(fields: [carId], references: [id], onDelete: SetNull)
+
+  // Номер билета и позиция в очереди
+  number   Int // номер билета (1, 2, 3...)
+  position Int? // позиция в очереди (вычисляется)
+
+  status TicketStatus @default(WAITING)
+
+  // Отметки администратора
+  arrived Boolean @default(false) // прибыл / не прибыл
+  washed  Boolean @default(false) // помыт / не помыт
+
+  // Услуги и цена
+  notes      String? // ручное описание услуг
+  totalPrice Decimal? @db.Decimal(10, 2) // итоговая цена
+
+  scheduledAt DateTime? @map("scheduled_at")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  calledAt  DateTime? // когда вызвали
+  servedAt  DateTime? // когда обслужили
+
+  // Связи
+  services TicketService[]
+
+  @@unique([number]) // номер билета уникален
+  @@index([userId])
+  @@index([status])
+  @@index([position])
+}
+
+// Связь билета с услугами (Many-to-Many)
+model TicketService {
+  id          Int      @id @default(autoincrement())
+  ticketId    Int
+  ticket      Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  serviceId   Int?
+  service     Service? @relation(fields: [serviceId], references: [id], onDelete: SetNull)
+  customPrice Decimal? @db.Decimal(10, 2) // возможность изменить цену для конкретного билета
+  quantity    Int      @default(1)
+  createdAt   DateTime @default(now())
+
+  @@unique([ticketId, serviceId])
+  @@index([ticketId])
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum TicketStatus {
+  WAITING // в очереди
+  CALLED // вызван
+  SERVED // обслужен
+  CANCELLED // отменён
+}
