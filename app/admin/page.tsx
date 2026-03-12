@@ -1,6 +1,5 @@
 // app/admin/page.tsx
 'use client'
-
 import { useState, useEffect } from 'react'
 import { AdminData, Ticket, TicketType, Settings } from '@/types/admin'
 import { fetchAdminData, updateStatus, updateTicket, deleteTicket } from '@/lib/api'
@@ -70,14 +69,14 @@ export default function AdminPage() {
         }
     }
 
-    const handleWashStatusChange = async (id: number, field: string, value: boolean) => {
+    const handleWashStatusChange = async (id: number | string, field: string, value: boolean) => {
         const result = await updateStatus('washSession', id, field, value)
         if (result.success) {
             loadData()
         }
     }
 
-    const handleComplete = async (id: number) => {
+    const handleComplete = async (id: number | string) => {
         const result = await updateStatus('washSession', id, 'complete', true)
         if (result.success) {
             loadData()
@@ -85,10 +84,10 @@ export default function AdminPage() {
     }
 
     const handleEdit = (id: number, type: TicketType) => {
-        const ticket = type === 'appointment'
-            ? data?.appointments.find((t) => t.id === id)
-            : data?.liveQueue.find((t) => t.id === id)
-
+        const ticket =
+            type === 'appointment'
+                ? data?.appointments.find((t) => t.id === id)
+                : data?.liveQueue.find((t) => t.id === id)
         if (ticket) {
             setEditingTicket(ticket)
             setEditType(type)
@@ -110,10 +109,10 @@ export default function AdminPage() {
     }
 
     const handleCancel = (id: number, type: TicketType) => {
-        const ticket = type === 'appointment'
-            ? data?.appointments.find((t) => t.id === id)
-            : data?.liveQueue.find((t) => t.id === id)
-
+        const ticket =
+            type === 'appointment'
+                ? data?.appointments.find((t) => t.id === id)
+                : data?.liveQueue.find((t) => t.id === id)
         if (ticket) {
             setDeletingTicket({ id, type, clientName: ticket.clientName })
             setDeleteModalOpen(true)
@@ -143,6 +142,7 @@ export default function AdminPage() {
         hour: '2-digit',
         minute: '2-digit',
     })
+
     const currentDate = new Date().toLocaleDateString('ru-RU', {
         weekday: 'long',
         day: 'numeric',

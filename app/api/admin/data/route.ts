@@ -1,73 +1,77 @@
+// app/api/admin/data/route.ts
+
 import { NextResponse } from 'next/server'
-import { PrismaClient, AppointmentStatus, LiveQueueStatus, WashStatus } from '@prisma/client'
-import { PrismaPg } from '@prisma/adapter-pg'
-import pg from 'pg'
-
-// Игнорируем ошибки SSL
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
-
-function getPrisma() {
-    const connectionString = process.env.DATABASE_URL || ''
-    const pool = new pg.Pool({
-        connectionString: connectionString + (connectionString.includes('?') ? '&' : '?') + 'sslmode=require',
-        ssl: { rejectUnauthorized: false }
-    })
-    const adapter = new PrismaPg(pool)
-    return new PrismaClient({ adapter })
-}
+import { prisma } from '@/lib/prisma'
+import { QueueEntrySource, QueueEntryStatus, WashStatus } from '@prisma/client'
 
 export async function GET() {
     try {
-        const prisma = getPrisma()
-
-        // Получаем настройки
-        const settingsRaw = await prisma.setting.findMany()
-        const settings: Record<string, unknown> = {}
-        settingsRaw.forEach(s => {
-            settings[s.key] = s.value
+        // ===========================================
+        // КОНФИГУРАЦИЯ
+        // ===========================================
+        const config = await prisma.systemConfig.findFirst({
+            where: { effectiveFrom: { lte: new Date() } },
+            orderBy: { effectiveFrom: 'desc' }
         })
 
-        // Получаем боксы и информацию о текущих мойках
+        // ===========================================
+        // БОКСЫ
+        // ===========================================
         const boxes = await prisma.box.findMany({
+            where: { isActive: true },
             include: {
                 washSessions: {
                     where: { status: WashStatus.IN_PROGRESS },
                     include: {
                         client: true,
-                        appointment: true,
-                        liveQueue: true
+                        queueEntry: true
                     }
+                },
+                queueEntries: {
+                    where: { status: QueueEntryStatus.IN_SERVICE }
                 }
             },
             orderBy: { number: 'asc' }
         })
 
-        // Получаем записи по времени
-        const appointments = await prisma.appointment.findMany({
-            where: {
-                status: { notIn: [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW] }
+        // ===========================================
+        // ЗАПИСИ В ОЧЕРЕДИ (БЕЗ IN_SERVICE)
+        // ===========================================
+
+        // Только ожидающие записи (без тех, кто уже в работе)
+        const waitingStatuses = [
+            QueueEntryStatus.CREATED,
+            QueueEntryStatus.CONFIRMED,
+            QueueEntryStatus.CHECKED_IN
+        ]
+
+        const queueEntries = await prisma.queueEntry.findMany({
+            where: { status: { in: waitingStatuses } },
+            include: {
+                client: true,
+                box: true
             },
-            include: { client: true, box: true },
-            orderBy: { startTime: 'asc' }
+            orderBy: [
+                { priority: 'desc' },
+                { plannedStartAt: 'asc' }
+            ]
         })
 
-        // Получаем живую очередь
-        const liveQueue = await prisma.liveQueue.findMany({
-            where: {
-                status: { notIn: [LiveQueueStatus.COMPLETED, LiveQueueStatus.LEFT] }
-            },
-            include: { client: true, box: true },
-            orderBy: { arrivalTime: 'asc' }
-        })
+        // Разделяем на категории для UI
+        const scheduled = queueEntries.filter(e => e.source === QueueEntrySource.SCHEDULED)
+        const live = queueEntries.filter(e => e.source === QueueEntrySource.LIVE)
+        const adminCreated = queueEntries.filter(e => e.source === QueueEntrySource.ADMIN)
 
-        await prisma.$disconnect()
+        // ===========================================
+        // ФОРМАТИРОВАНИЕ ДАННЫХ
+        // ===========================================
 
-        // Форматируем данные для фронтенда
+        // Форматируем боксы
         const formattedBoxes = boxes.map(box => {
             const activeSession = box.washSessions[0]
+            const activeEntry = box.queueEntries[0]
 
-            let status: 'free' | 'occupied' | 'waiting' = 'free'
-            let clientType: 'scheduled' | 'live' | undefined
+            let status: 'free' | 'occupied' = 'free'
             let clientName: string | undefined
             let carBrand: string | undefined
             let carModel: string | undefined
@@ -78,41 +82,37 @@ export async function GET() {
             let isWashed: boolean | undefined
             let price: number | undefined
             let isPaid: boolean | undefined
+            let source: 'live' | 'scheduled' | 'admin' | undefined
+            let queueEntryId: string | undefined
 
-            if (activeSession) {
+            if (activeSession || activeEntry) {
                 status = 'occupied'
-                const client = activeSession.client
 
-                if (activeSession.appointmentId) {
-                    clientType = 'scheduled'
-                    const appointment = activeSession.appointment
-                    price = appointment?.price ?? 0
-                    // ИСПРАВЛЕНО: проверяем на undefined и null явно
-                    isPaid = activeSession.isPaid !== undefined && activeSession.isPaid !== null
-                        ? activeSession.isPaid
-                        : appointment?.isPaid ?? false
-                } else if (activeSession.liveQueueId) {
-                    clientType = 'live'
-                    const live = activeSession.liveQueue
-                    price = live?.price ?? 0
-                    // ИСПРАВЛЕНО: проверяем на undefined и null явно
-                    isPaid = activeSession.isPaid !== undefined && activeSession.isPaid !== null
-                        ? activeSession.isPaid
-                        : live?.isPaid ?? false
-                }
+                const client = activeSession?.client || activeEntry?.clientId
+                const entry = activeSession?.queueEntry || activeEntry
 
                 clientName = client?.name
                 carBrand = client?.carBrand || ''
                 carModel = client?.carModel || ''
                 carColor = client?.carColor || ''
                 carNumber = client?.carNumber || ''
-                isWashed = activeSession.isWashed
 
-                if (activeSession.startTime && activeSession.duration) {
-                    const start = new Date(activeSession.startTime)
-                    startTime = start.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-                    const end = new Date(start.getTime() + activeSession.duration * 60000)
-                    expectedEndTime = end.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                if (entry) {
+                    queueEntryId = entry.id
+                    price = entry.price ?? 0
+                    isPaid = entry.isPaid
+                    source = entry.source.toLowerCase() as 'live' | 'scheduled' | 'admin'
+
+                    if (entry.actualStartAt || entry.plannedStartAt) {
+                        const start = entry.actualStartAt || entry.plannedStartAt
+                        startTime = start.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                        const end = new Date(start.getTime() + (entry.estimatedDurationMin || 30) * 60000)
+                        expectedEndTime = end.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                    }
+                }
+
+                if (activeSession) {
+                    isWashed = activeSession.isWashed
                 }
             }
 
@@ -120,7 +120,6 @@ export async function GET() {
                 id: box.id,
                 number: box.number,
                 status,
-                clientType,
                 clientName,
                 carBrand,
                 carModel,
@@ -130,62 +129,129 @@ export async function GET() {
                 expectedEndTime,
                 isWashed,
                 price,
-                isPaid
+                isPaid,
+                source,
+                queueEntryId // добавляем ID записи для связи
             }
         })
 
-        // Форматируем записи
-        const formattedAppointments = appointments.map(apt => ({
-            id: apt.id,
+        // Форматируем записи по времени (SCHEDULED)
+        const formattedScheduled = scheduled.map((entry) => ({
+            id: entry.id,
             type: 'scheduled' as const,
-            time: new Date(apt.startTime).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-            clientName: apt.client?.name ?? '',
-            phone: apt.client?.phone ?? '',
-            carBrand: apt.client?.carBrand ?? '',
-            carModel: apt.client?.carModel ?? '',
-            carColor: apt.client?.carColor ?? '',
-            carNumber: apt.client?.carNumber ?? '',
-            services: apt.services ?? '',
-            price: apt.price ?? 0,
-            isPaid: apt.isPaid,
-            arrived: !!apt.arrivalTime,
-            inProgress: apt.status === AppointmentStatus.COMPLETED && !!apt.boxId,
-            completed: apt.status === AppointmentStatus.COMPLETED,
-            boxNumber: apt.box?.number
+            time: entry.plannedStartAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+            clientName: entry.client?.name ?? '',
+            phone: entry.client?.phone ?? '',
+            carBrand: entry.client?.carBrand ?? '',
+            carModel: entry.client?.carModel ?? '',
+            carColor: entry.client?.carColor ?? '',
+            carNumber: entry.client?.carNumber ?? '',
+            services: entry.services ?? '',
+            price: entry.price ?? 0,
+            isPaid: entry.isPaid,
+            status: entry.status,
+            priority: entry.priority,
+            notes: entry.notes,
+            arrived: entry.status === QueueEntryStatus.CHECKED_IN,
+            inProgress: false, // всегда false, т.к. IN_SERVICE отфильтрованы
+            boxNumber: entry.box?.number
         }))
 
-        // Форматируем живую очередь
-        const formattedLiveQueue = liveQueue.map((item, index) => ({
-            id: item.id,
+        // Форматируем живую очередь (LIVE)
+        const formattedLive = live.map((entry, index) => ({
+            id: entry.id,
             type: 'live' as const,
-            time: new Date(item.arrivalTime).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-            clientName: item.client?.name ?? '',
-            phone: item.client?.phone ?? '',
-            carBrand: item.client?.carBrand ?? '',
-            carModel: item.client?.carModel ?? '',
-            carColor: item.client?.carColor ?? '',
-            carNumber: item.client?.carNumber ?? '',
-            services: item.services ?? '',
-            price: item.price ?? 0,
-            isPaid: item.isPaid,
-            arrived: item.status !== LiveQueueStatus.WAITING,
-            inProgress: item.status === LiveQueueStatus.IN_PROGRESS,
-            completed: item.status === LiveQueueStatus.COMPLETED,
-            position: item.position ?? index + 1,
-            boxNumber: item.box?.number
+            time: entry.plannedStartAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+            requestedAt: entry.requestedStartAt?.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+            clientName: entry.client?.name ?? '',
+            phone: entry.client?.phone ?? '',
+            carBrand: entry.client?.carBrand ?? '',
+            carModel: entry.client?.carModel ?? '',
+            carColor: entry.client?.carColor ?? '',
+            carNumber: entry.client?.carNumber ?? '',
+            services: entry.services ?? '',
+            price: entry.price ?? 0,
+            isPaid: entry.isPaid,
+            status: entry.status,
+            priority: entry.priority,
+            position: index + 1,
+            arrived: entry.status === QueueEntryStatus.CHECKED_IN,
+            inProgress: false, // всегда false, т.к. IN_SERVICE отфильтрованы
+            boxNumber: entry.box?.number
         }))
+
+        // Форматируем админские записи
+        const formattedAdmin = adminCreated.map((entry) => ({
+            id: entry.id,
+            type: 'admin' as const,
+            time: entry.plannedStartAt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+            clientName: entry.client?.name ?? '',
+            phone: entry.client?.phone ?? '',
+            carBrand: entry.client?.carBrand ?? '',
+            carModel: entry.client?.carModel ?? '',
+            carColor: entry.client?.carColor ?? '',
+            carNumber: entry.client?.carNumber ?? '',
+            services: entry.services ?? '',
+            price: entry.price ?? 0,
+            isPaid: entry.isPaid,
+            status: entry.status,
+            notes: entry.notes,
+            boxNumber: entry.box?.number
+        }))
+
+        // ===========================================
+        // СТАТИСТИКА
+        // ===========================================
+        const allActiveStatuses = [
+            QueueEntryStatus.CREATED,
+            QueueEntryStatus.CONFIRMED,
+            QueueEntryStatus.CHECKED_IN,
+            QueueEntryStatus.IN_SERVICE
+        ]
+
+        const stats = {
+            totalInQueue: queueEntries.length,
+            liveCount: live.length,
+            scheduledCount: scheduled.length,
+            adminCount: adminCreated.length,
+            completedToday: await prisma.queueEntry.count({
+                where: {
+                    status: QueueEntryStatus.COMPLETED,
+                    actualEndAt: {
+                        gte: new Date(new Date().setHours(0, 0, 0, 0))
+                    }
+                }
+            }),
+            inService: await prisma.queueEntry.count({
+                where: { status: QueueEntryStatus.IN_SERVICE }
+            }),
+            freeBoxes: boxes.filter(b => b.washSessions.length === 0 && b.queueEntries.length === 0).length
+        }
 
         return NextResponse.json({
             boxes: formattedBoxes,
-            appointments: formattedAppointments,
-            liveQueue: formattedLiveQueue,
+            appointments: formattedScheduled,
+            liveQueue: formattedLive,
+            adminEntries: formattedAdmin,
             settings: {
-                washTime: (settings.washDuration as number) || 30,
-                confirmationInterval: (settings.confirmationInterval as number) || 15,
-                boxCount: (settings.boxCount as number) || 5,
-                workStart: (settings.workStart as string) || '08:00',
-                workEnd: (settings.workEnd as string) || '22:00'
-            }
+                washTime: config?.defaultDurationMin ?? 30,
+                confirmationInterval: config?.noShowGraceMin ?? 15,
+                boxCount: config?.activeBoxesCount ?? 5,
+                workStart: `${String(config?.workStartHour ?? 8).padStart(2, '0')}:00`,
+                workEnd: `${String(config?.workEndHour ?? 22).padStart(2, '0')}:00`,
+                liveQueueMaxWait: config?.liveQueueMaxWaitMin ?? 120,
+                noShowGrace: config?.noShowGraceMin ?? 15,
+                slotStep: config?.slotStepMin ?? 5
+            },
+            config: config ? {
+                id: config.id,
+                effectiveFrom: config.effectiveFrom.toISOString(),
+                activeBoxesCount: config.activeBoxesCount,
+                defaultDurationMin: config.defaultDurationMin,
+                liveQueueMaxWaitMin: config.liveQueueMaxWaitMin,
+                noShowGraceMin: config.noShowGraceMin
+            } : null,
+            stats
         })
 
     } catch (error) {

@@ -1,6 +1,5 @@
 // components/admin/BoxCard.tsx
 'use client'
-
 import { useState, useEffect } from 'react'
 import { Box } from '@/types/admin'
 import { Button } from '@/components/ui/Button'
@@ -8,8 +7,8 @@ import { Checkbox } from '@/components/ui/Checkbox'
 
 interface BoxCardProps {
     box: Box
-    onWashStatusChange?: (id: number, field: string, value: boolean) => void
-    onComplete?: (id: number) => void
+    onWashStatusChange?: (id: number | string, field: string, value: boolean) => void
+    onComplete?: (id: number | string) => void
 }
 
 const statusStyles = {
@@ -19,30 +18,36 @@ const statusStyles = {
 }
 
 export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
-    const [isWashed, setIsWashed] = useState(box.isWashed || false)
+    const [isWashed, setIsWashed] = useState(false)
     const [isPaid, setIsPaid] = useState(box.isPaid || false)
 
     useEffect(() => {
-        setIsWashed(box.isWashed || false)
         setIsPaid(box.isPaid || false)
-    }, [box.isWashed, box.isPaid])
+    }, [box.isPaid])
 
     const isOccupied = box.status === 'occupied'
     const isFree = box.status === 'free'
 
     const handleWashedChange = (checked: boolean) => {
         setIsWashed(checked)
-        onWashStatusChange?.(box.id, 'isWashed', checked)
     }
 
     const handlePaidChange = (checked: boolean) => {
         setIsPaid(checked)
+        const entryId = box.queueEntryId || box.id
+        onWashStatusChange?.(entryId, 'isPaid', checked)
     }
+
+    const handleComplete = () => {
+        const entryId = box.queueEntryId || box.id
+        onComplete?.(entryId)
+    }
+
+    const canComplete = isWashed && isPaid
 
     return (
         <div
-            className={`rounded-xl border-2 p-2 sm:p-3 transition-all ${statusStyles[box.status]} ${isWashed ? 'opacity-60' : ''
-                }`}
+            className={`rounded-xl border-2 p-2 sm:p-3 transition-all ${statusStyles[box.status]}`}
         >
             <div className="flex justify-between items-start mb-1">
                 <span
@@ -52,20 +57,18 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                     Бокс {box.number}
                 </span>
             </div>
-
             {box.status !== 'free' ? (
                 <div className="space-y-1">
                     <div className="text-xs">
                         <span
-                            className={`px-1 py-0.5 rounded ${box.clientType === 'scheduled'
+                            className={`px-1 py-0.5 rounded ${box.source === 'scheduled'
                                     ? 'bg-purple-100 text-purple-700'
                                     : 'bg-cyan-100 text-cyan-700'
                                 }`}
                         >
-                            {box.clientType === 'scheduled' ? 'Запись' : 'Живой'}
+                            {box.source === 'scheduled' ? 'Запись' : box.source === 'admin' ? 'Админ' : 'Живой'}
                         </span>
                     </div>
-
                     <div className="font-medium text-gray-800 text-xs sm:text-sm truncate">
                         {box.clientName}
                     </div>
@@ -77,7 +80,6 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                     <div className="text-xs text-gray-500">
                         {box.startTime} → {box.expectedEndTime}
                     </div>
-
                     <div className="flex flex-col gap-1 mt-1">
                         <div className="flex items-center justify-between">
                             <span className="text-xs text-gray-500">Сумма:</span>
@@ -85,6 +87,7 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                                 {box.price || 0} ₽
                             </span>
                         </div>
+                        {/* Оплачено */}
                         <div
                             className={`flex items-center justify-center gap-1 px-1.5 py-0.5 rounded-lg border-2 cursor-pointer transition-all ${isPaid
                                     ? 'bg-green-100 border-green-400 shadow-sm'
@@ -92,7 +95,10 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                                 }`}
                             onClick={() => handlePaidChange(!isPaid)}
                         >
-                            <Checkbox checked={isPaid} onClick={() => handlePaidChange(!isPaid)} />
+                            <Checkbox
+                                checked={isPaid}
+                                onClick={() => handlePaidChange(!isPaid)}
+                            />
                             <span
                                 className={`text-[10px] sm:text-xs font-semibold ${isPaid ? 'text-green-700' : 'text-gray-400'
                                     }`}
@@ -102,7 +108,7 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                             {isPaid && <span className="w-1 h-1 bg-green-500 rounded-full animate-pulse" />}
                         </div>
                     </div>
-
+                    {/* Помыт */}
                     <div className="mt-1">
                         <div
                             className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border-2 cursor-pointer transition-all ${isWashed
@@ -111,7 +117,10 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                                 }`}
                             onClick={() => handleWashedChange(!isWashed)}
                         >
-                            <Checkbox checked={isWashed} onClick={() => handleWashedChange(!isWashed)} />
+                            <Checkbox
+                                checked={isWashed}
+                                onClick={() => handleWashedChange(!isWashed)}
+                            />
                             <span
                                 className={`text-xs font-semibold ${isWashed ? 'text-green-700' : 'text-gray-600'
                                     }`}
@@ -123,15 +132,19 @@ export function BoxCard({ box, onWashStatusChange, onComplete }: BoxCardProps) {
                             )}
                         </div>
                     </div>
-
-                    <Button
-                        variant="success"
-                        size="sm"
-                        className="w-full mt-1"
-                        onClick={() => onComplete?.(box.id)}
-                    >
-                        Завершить
-                    </Button>
+                    {/* Кнопка завершить - видна только когда оба чекбокса активны, место зарезервировано */}
+                    <div className="mt-1 h-8">
+                        {canComplete && (
+                            <Button
+                                variant="success"
+                                size="sm"
+                                className="w-full"
+                                onClick={handleComplete}
+                            >
+                                Завершить
+                            </Button>
+                        )}
+                    </div>
                 </div>
             ) : (
                 <div className="text-sm text-green-600 font-medium py-2 text-center">Свободен</div>

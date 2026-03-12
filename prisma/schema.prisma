@@ -11,72 +11,70 @@ model Client {
   id        String   @id @default(cuid())
   name      String
   phone     String?
-  carNumber String?  @unique // госномер авто
-  carBrand  String? // марка
-  carModel  String? // модель
-  carColor  String? // цвет
+  carNumber String?  @unique
+  carBrand  String?
+  carModel  String?
+  carColor  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  appointments Appointment[]
-  liveQueue    LiveQueue[]
-  washSessions WashSession[]
+  queueEntries  QueueEntry[]
+  washSessions  WashSession[]
+  notifications Notification[]
 }
 
-// ====================== Запись по времени ======================
-model Appointment {
+// ====================== Единая очередь ======================
+model QueueEntry {
   id       String @id @default(cuid())
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  startTime DateTime // запланированное время начала
-  duration  Int               @default(30) // длительность в минутах
-  status    AppointmentStatus @default(PENDING)
+  // Источник записи
+  source QueueEntrySource // LIVE, SCHEDULED, ADMIN
 
-  services String? // услуги (текстом)
-  price    Int? // сумма
+  // Статус
+  status   QueueEntryStatus @default(CREATED)
+  priority Int              @default(0) // для VIP и срочных
+
+  // Время
+  requestedStartAt DateTime? // что хотел клиент (null = "как можно скорее")
+  plannedStartAt   DateTime // расчётное/подтверждённое время старта
+  plannedEndAt     DateTime // plannedStartAt + duration
+
+  // Длительность
+  estimatedDurationMin Int  @default(30)
+  actualDurationMin    Int? // фактическая (если отличается)
+
+  // Дедлайны и факты
+  checkinDeadlineAt DateTime? // plannedStartAt + grace period
+  checkedInAt       DateTime? // когда клиент прибыл
+  actualStartAt     DateTime? // реальное начало мойки
+  actualEndAt       DateTime? // реальное окончание
+
+  // Услуги и оплата
+  services String?
+  price    Int?
   isPaid   Boolean @default(false)
 
-  confirmedAt DateTime? // когда подтвердил прибытие
-  arrivalTime DateTime? // фактическое прибытие
-  boxId       String?
-  box         Box?      @relation(fields: [boxId], references: [id])
-
-  washSession WashSession? // связь с сессией мойки
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([startTime])
-  @@index([status])
-}
-
-// ====================== Живая очередь ======================
-model LiveQueue {
-  id       String @id @default(cuid())
-  clientId String
-  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-
-  arrivalTime DateTime        @default(now()) // время прибытия
-  status      LiveQueueStatus @default(WAITING)
-
-  services String? // услуги
-  price    Int? // сумма
-  isPaid   Boolean @default(false)
-
-  position  Int? // позиция в очереди (вычисляется)
-  invitedAt DateTime? // когда пригласили на мойку
-
+  // Бокс (назначается при старте мойки)
   boxId String?
   box   Box?    @relation(fields: [boxId], references: [id])
 
-  washSession WashSession? // связь с сессией мойки
+  // Optimistic lock
+  version Int @default(1)
+
+  // Связь с сессией мойки
+  washSession WashSession?
+
+  // Примечания
+  notes String? // комментарии админа
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@index([arrivalTime])
-  @@index([status])
+  @@index([status, plannedStartAt])
+  @@index([source, status, createdAt])
+  @@index([clientId, status])
 }
 
 // ====================== Сессия мойки ======================
@@ -88,18 +86,15 @@ model WashSession {
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
-  appointmentId String?      @unique // если мойка по записи
-  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
-
-  liveQueueId String?    @unique // если мойка из живой очереди
-  liveQueue   LiveQueue? @relation(fields: [liveQueueId], references: [id])
+  queueEntryId String?     @unique
+  queueEntry   QueueEntry? @relation(fields: [queueEntryId], references: [id])
 
   startTime DateTime
-  endTime   DateTime? // фактическое окончание
-  duration  Int? // фактическая длительность
+  endTime   DateTime?
+  duration  Int?
 
   status   WashStatus @default(IN_PROGRESS)
-  isWashed Boolean    @default(false) // помыт / готов
+  isWashed Boolean    @default(false)
   isPaid   Boolean    @default(false)
 
   createdAt DateTime @default(now())
@@ -112,21 +107,42 @@ model WashSession {
 // ====================== Бокс ======================
 model Box {
   id       String  @id @default(cuid())
-  number   Int     @unique // номер бокса
-  isActive Boolean @default(true) // активен / на обслуживании
+  number   Int     @unique
+  isActive Boolean @default(true)
 
-  appointments Appointment[]
-  liveQueue    LiveQueue[]
+  queueEntries QueueEntry[]
   washSessions WashSession[]
 }
 
-// ====================== Настройки ======================
-model Setting {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  value       Json // универсальное значение
-  description String?
-  updatedAt   DateTime @updatedAt
+// ====================== Версионные настройки ======================
+model SystemConfig {
+  id String @id @default(cuid())
+
+  effectiveFrom DateTime // когда вступает в силу
+
+  // Основные параметры
+  activeBoxesCount   Int // количество активных боксов
+  defaultDurationMin Int // стандартная длительность мойки
+  slotStepMin        Int @default(5) // шаг слотов для записи
+
+  // Правила очереди
+  liveQueueMaxWaitMin Int @default(120) // макс. ожидание в живой очереди
+  noShowGraceMin      Int @default(15) // время на опоздание
+  reminderBeforeMin   Int @default(30) // за сколько напоминать
+
+  // Рабочее время
+  workStartHour Int    @default(8) // начало работы (часы)
+  workEndHour   Int    @default(22) // конец работы (часы)
+  workDays      String @default("1,2,3,4,5,6,7") // пн-вс
+
+  createdById String?
+  createdBy   User?   @relation("ConfigCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+
+  @@index([effectiveFrom])
 }
 
 // ====================== Пользователи (админы) ======================
@@ -134,46 +150,76 @@ model User {
   id           String   @id @default(cuid())
   email        String   @unique
   passwordHash String
+  name         String?
   role         UserRole @default(OPERATOR)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  isActive     Boolean  @default(true)
 
-  events EventLog[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events         EventLog[]
+  createdConfigs SystemConfig[] @relation("ConfigCreatedBy")
+  systemConfigs  SystemConfig[]
+}
+
+// ====================== Уведомления ======================
+model Notification {
+  id       String @id @default(cuid())
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  channel NotificationChannel @default(PUSH)
+
+  title   String
+  message String
+  data    Json?
+
+  scheduledAt DateTime
+  sentAt      DateTime?
+  status      NotificationStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@index([clientId, status])
+  @@index([scheduledAt])
 }
 
 // ====================== Журнал событий ======================
 model EventLog {
   id          String   @id @default(cuid())
   timestamp   DateTime @default(now())
-  type        String // APPOINTMENT_CREATED, CLIENT_ARRIVED, WASH_STARTED и т.д.
+  type        String
   description String
-  data        Json? // дополнительные данные
+  data        Json?
 
   userId String?
   user   User?   @relation(fields: [userId], references: [id])
 
-  relatedId   String? // id связанной сущности
-  relatedType String? // тип сущности (Appointment, LiveQueue, WashSession)
+  relatedId   String?
+  relatedType String? // QueueEntry, WashSession, Client, etc.
 
   @@index([timestamp])
   @@index([type])
+  @@index([relatedId, relatedType])
 }
 
 // ====================== Enums ======================
-enum AppointmentStatus {
-  PENDING // ожидает подтверждения
-  CONFIRMED // подтверждено
-  CANCELLED // отменено
-  COMPLETED // выполнено
-  NO_SHOW // не явился
+enum QueueEntrySource {
+  LIVE // живая очередь - "как можно скорее"
+  SCHEDULED // предварительная запись на время
+  ADMIN // создана администратором
 }
 
-enum LiveQueueStatus {
-  WAITING // в очереди
-  INVITED // приглашён
-  IN_PROGRESS // в работе
-  COMPLETED // помыт
-  LEFT // ушёл
+enum QueueEntryStatus {
+  CREATED // создана, ожидает
+  CONFIRMED // подтверждена (клиент получил уведомление)
+  CHECKED_IN // клиент прибыл
+  IN_SERVICE // мойка в процессе
+  COMPLETED // завершена
+  CANCELLED // отменена
+  NO_SHOW // клиент не явился
+  EXPIRED // истёк срок ожидания
 }
 
 enum WashStatus {
@@ -185,4 +231,24 @@ enum WashStatus {
 enum UserRole {
   ADMIN
   OPERATOR
+}
+
+enum NotificationType {
+  REMINDER // напоминание о записи
+  QUEUE_UPDATE // изменение позиции в очереди
+  READY // бокс готов, можно заезжать
+  CANCELLED // запись отменена
+  DELAY // задержка
+}
+
+enum NotificationChannel {
+  PUSH
+  SMS
+  EMAIL
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
 }

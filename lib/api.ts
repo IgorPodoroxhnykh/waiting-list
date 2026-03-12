@@ -18,7 +18,7 @@ export async function fetchAdminData(): Promise<AdminData | null> {
 
 export async function updateStatus(
     type: 'appointment' | 'liveQueue' | 'washSession',
-    id: number,
+    id: number | string,
     field: string,
     value: boolean
 ): Promise<{ success: boolean; error?: string }> {
@@ -41,7 +41,7 @@ export async function updateStatus(
 
 export async function updateTicket(
     type: TicketType,
-    id: number,
+    id: number | string,
     data: Partial<Ticket>
 ): Promise<{ success: boolean; error?: string }> {
     try {
@@ -63,7 +63,7 @@ export async function updateTicket(
 
 export async function deleteTicket(
     type: TicketType,
-    id: number
+    id: number | string
 ): Promise<{ success: boolean; error?: string }> {
     try {
         const response = await fetch(`${API_BASE}/delete-ticket`, {

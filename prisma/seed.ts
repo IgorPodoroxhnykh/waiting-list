@@ -1,5 +1,5 @@
 import 'dotenv/config'
-import { PrismaClient, AppointmentStatus, LiveQueueStatus, WashStatus, UserRole } from '@prisma/client'
+import { PrismaClient, QueueEntrySource, QueueEntryStatus, WashStatus, UserRole } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import pg from 'pg'
 
@@ -13,9 +13,7 @@ const main = async () => {
     // Создаём пул
     const pool = new pg.Pool({
         connectionString: connectionString + (connectionString.includes('?') ? '&' : '?') + 'sslmode=require',
-        ssl: {
-            rejectUnauthorized: false
-        }
+        ssl: { rejectUnauthorized: false }
     })
 
     // Создаём адаптер
@@ -30,32 +28,17 @@ const main = async () => {
     console.log('🧹 Очистка базы данных...')
 
     await prisma.$transaction([
+        prisma.notification.deleteMany(),
         prisma.washSession.deleteMany(),
-        prisma.appointment.deleteMany(),
-        prisma.liveQueue.deleteMany(),
+        prisma.queueEntry.deleteMany(),
         prisma.eventLog.deleteMany(),
+        prisma.systemConfig.deleteMany(),
         prisma.user.deleteMany(),
         prisma.client.deleteMany(),
-        prisma.setting.deleteMany(),
         prisma.box.deleteMany(),
     ])
 
     console.log('✅ База данных очищена\n')
-
-    // ===========================================
-    // НАСТРОЙКИ
-    // ===========================================
-    console.log('📝 Создание настроек...')
-
-    await prisma.setting.createMany({
-        data: [
-            { key: 'washDuration', value: 30, description: 'Время мойки по умолчанию (минуты)' },
-            { key: 'confirmationInterval', value: 15, description: 'Интервал подтверждения записи (минуты)' },
-            { key: 'boxCount', value: 5, description: 'Количество боксов' },
-            { key: 'workStart', value: '08:00', description: 'Начало рабочего дня' },
-            { key: 'workEnd', value: '22:00', description: 'Конец рабочего дня' },
-        ],
-    })
 
     // ===========================================
     // БОКСЫ
@@ -77,19 +60,42 @@ const main = async () => {
     // ===========================================
     console.log('👤 Создание пользователей...')
 
-    await prisma.user.createMany({
-        data: [
-            {
-                email: 'admin@carwash.ru',
-                passwordHash: '$2a$10$xV8YqK1h4fX5Z9Y2X5Z9Yu5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5',
-                role: UserRole.ADMIN,
-            },
-            {
-                email: 'operator@carwash.ru',
-                passwordHash: '$2a$10$xV8YqK1h4fX5Z9Y2X5Z9Yu5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5',
-                role: UserRole.OPERATOR,
-            },
-        ],
+    const adminUser = await prisma.user.create({
+        data: {
+            email: 'admin@carwash.ru',
+            passwordHash: '$2a$10$xV8YqK1h4fX5Z9Y2X5Z9Yu5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5',
+            name: 'Администратор',
+            role: UserRole.ADMIN,
+        },
+    })
+
+    await prisma.user.create({
+        data: {
+            email: 'operator@carwash.ru',
+            passwordHash: '$2a$10$xV8YqK1h4fX5Z9Y2X5Z9Yu5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5Z9Y2X5',
+            name: 'Оператор',
+            role: UserRole.OPERATOR,
+        },
+    })
+
+    // ===========================================
+    // КОНФИГУРАЦИЯ СИСТЕМЫ
+    // ===========================================
+    console.log('⚙️  Создание конфигурации...')
+
+    await prisma.systemConfig.create({
+        data: {
+            effectiveFrom: new Date(),
+            activeBoxesCount: 5,
+            defaultDurationMin: 30,
+            slotStepMin: 5,
+            liveQueueMaxWaitMin: 120,
+            noShowGraceMin: 15,
+            reminderBeforeMin: 30,
+            workStartHour: 8,
+            workEndHour: 22,
+            createdById: adminUser.id,
+        },
     })
 
     // ===========================================
@@ -113,149 +119,226 @@ const main = async () => {
     })
 
     // ===========================================
-    // ЗАПИСИ ПО ВРЕМЕНИ
+    // ЗАПИСИ В ЕДИНОЙ ОЧЕРЕДИ (QueueEntry)
     // ===========================================
-    console.log('📅 Создание записей...')
+    console.log('📅 Создание записей в очереди...')
 
-    const today = new Date()
+    const now = new Date()
+    const today = new Date(now)
     today.setHours(0, 0, 0, 0)
 
-    const box1 = await prisma.box.findUnique({ where: { number: 1 } })
-    const box2 = await prisma.box.findUnique({ where: { number: 2 } })
-    const box3 = await prisma.box.findUnique({ where: { number: 3 } })
+    const boxes = await prisma.box.findMany({ orderBy: { number: 'asc' } })
 
-    // Завершённая запись
-    await prisma.appointment.create({
+    // --- Завершённые записи (SCHEDULED) ---
+
+    // Запись 1: Николай Морозов - завершено
+    const entry1Start = new Date(today.getTime() + 10 * 60 * 60 * 1000) // 10:00
+    await prisma.queueEntry.create({
         data: {
             clientId: clients[2].id,
-            startTime: new Date(today.getTime() + 14 * 60 * 60 * 1000),
-            duration: 30,
-            status: AppointmentStatus.COMPLETED,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.COMPLETED,
+            requestedStartAt: entry1Start,
+            plannedStartAt: entry1Start,
+            plannedEndAt: new Date(entry1Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            actualStartAt: entry1Start,
+            actualEndAt: new Date(entry1Start.getTime() + 28 * 60000),
             services: 'Мойка кузова, коврики',
             price: 1200,
             isPaid: true,
-            confirmedAt: new Date(today.getTime() + 14 * 60 * 60 * 1000),
-            arrivalTime: new Date(today.getTime() + 14 * 60 * 60 * 1000),
-            boxId: box1!.id,
+            boxId: boxes[0].id,
         },
     })
 
-    // Активная запись (в боксе)
-    await prisma.appointment.create({
+    // Запись 2: Иван Петров - в процессе мойки (IN_SERVICE)
+    const entry2Start = new Date(now.getTime() - 15 * 60000) // началась 15 мин назад
+    const entry2 = await prisma.queueEntry.create({
         data: {
             clientId: clients[0].id,
-            startTime: new Date(today.getTime() + 14.5 * 60 * 60 * 1000),
-            duration: 30,
-            status: AppointmentStatus.COMPLETED,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.IN_SERVICE,
+            requestedStartAt: entry2Start,
+            plannedStartAt: entry2Start,
+            plannedEndAt: new Date(entry2Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            actualStartAt: entry2Start,
+            checkedInAt: new Date(entry2Start.getTime() - 5 * 60000),
             services: 'Комплексная мойка',
-            price: 1200,
+            price: 1500,
             isPaid: true,
-            confirmedAt: new Date(today.getTime() + 14.5 * 60 * 60 * 1000),
-            arrivalTime: new Date(today.getTime() + 14.5 * 60 * 60 * 1000),
-            boxId: box1!.id,
+            boxId: boxes[0].id,
         },
     })
 
-    // Подтверждённая запись (ждёт)
-    await prisma.appointment.create({
+    // --- Live очередь ---
+
+    // Live 1: Сергей Сидоров - в процессе мойки
+    const live1Start = new Date(now.getTime() - 10 * 60000)
+    const live1 = await prisma.queueEntry.create({
+        data: {
+            clientId: clients[1].id,
+            source: QueueEntrySource.LIVE,
+            status: QueueEntryStatus.IN_SERVICE,
+            priority: 0,
+            requestedStartAt: new Date(now.getTime() - 25 * 60000), // пришёл 25 мин назад
+            plannedStartAt: live1Start,
+            plannedEndAt: new Date(live1Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            actualStartAt: live1Start,
+            checkedInAt: new Date(live1Start.getTime() - 3 * 60000),
+            services: 'Мойка кузова',
+            price: 1000,
+            isPaid: false,
+            boxId: boxes[1].id,
+        },
+    })
+
+    // Live 2: Пётр Новиков - следующий в очереди (CONFIRMED)
+    const live2Planned = new Date(now.getTime() + 15 * 60000) // через 15 мин
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[7].id,
+            source: QueueEntrySource.LIVE,
+            status: QueueEntryStatus.CONFIRMED,
+            priority: 0,
+            requestedStartAt: new Date(now.getTime() - 10 * 60000),
+            plannedStartAt: live2Planned,
+            plannedEndAt: new Date(live2Planned.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            checkinDeadlineAt: new Date(live2Planned.getTime() + 15 * 60000),
+            services: 'Экспресс мойка',
+            price: 500,
+            isPaid: true,
+        },
+    })
+
+    // Live 3: Анна Соколова - в очереди (CREATED)
+    const live3Planned = new Date(now.getTime() + 45 * 60000) // через 45 мин
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[8].id,
+            source: QueueEntrySource.LIVE,
+            status: QueueEntryStatus.CREATED,
+            priority: 0,
+            requestedStartAt: new Date(now.getTime() - 5 * 60000),
+            plannedStartAt: live3Planned,
+            plannedEndAt: new Date(live3Planned.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            services: 'Мойка кузова, керамика',
+            price: 3000,
+            isPaid: false,
+        },
+    })
+
+    // Live 4: Виктор Кузнецов - в очереди (CREATED)
+    const live4Planned = new Date(now.getTime() + 75 * 60000) // через 1ч 15мин
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[9].id,
+            source: QueueEntrySource.LIVE,
+            status: QueueEntryStatus.CREATED,
+            priority: 0,
+            requestedStartAt: new Date(now.getTime() - 2 * 60000),
+            plannedStartAt: live4Planned,
+            plannedEndAt: new Date(live4Planned.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            services: 'Мойка кузова',
+            price: 700,
+            isPaid: false,
+        },
+    })
+
+    // --- Предварительные записи (SCHEDULED) на сегодня ---
+
+    // Запись 3: Алексей Иванов - подтверждённая запись на сегодня
+    const entry3Start = new Date(today.getTime() + 15 * 60 * 60 * 1000) // 15:00
+    await prisma.queueEntry.create({
         data: {
             clientId: clients[3].id,
-            startTime: new Date(today.getTime() + 15 * 60 * 60 * 1000),
-            duration: 30,
-            status: AppointmentStatus.CONFIRMED,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.CONFIRMED,
+            requestedStartAt: entry3Start,
+            plannedStartAt: entry3Start,
+            plannedEndAt: new Date(entry3Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            checkinDeadlineAt: new Date(entry3Start.getTime() + 15 * 60000),
             services: 'Комплексная мойка + полировка',
             price: 2500,
             isPaid: false,
-            confirmedAt: new Date(today.getTime() + 14.8 * 60 * 60 * 1000),
-            arrivalTime: new Date(today.getTime() + 15 * 60 * 60 * 1000),
-            boxId: box3!.id,
         },
     })
 
-    // Ожидающие записи
-    await prisma.appointment.createMany({
-        data: [
-            {
-                clientId: clients[4].id,
-                startTime: new Date(today.getTime() + 15.5 * 60 * 60 * 1000),
-                duration: 30,
-                status: AppointmentStatus.PENDING,
-                services: 'Мойка кузова',
-                price: 800,
-                isPaid: true,
-            },
-            {
-                clientId: clients[5].id,
-                startTime: new Date(today.getTime() + 16 * 60 * 60 * 1000),
-                duration: 30,
-                status: AppointmentStatus.PENDING,
-                services: 'Нано мойка, воск',
-                price: 1800,
-                isPaid: false,
-            },
-            {
-                clientId: clients[6].id,
-                startTime: new Date(today.getTime() + 16.5 * 60 * 60 * 1000),
-                duration: 30,
-                status: AppointmentStatus.PENDING,
-                services: 'Мойка кузова, салона',
-                price: 1500,
-                isPaid: false,
-            },
-        ],
-    })
-
-    // ===========================================
-    // ЖИВАЯ ОЧЕРЕДЬ
-    // ===========================================
-    console.log('📋 Создание живой очереди...')
-
-    // Клиент в боксе (из живой очереди)
-    const live1 = await prisma.liveQueue.create({
+    // Запись 4: Мария Козлова - ожидает подтверждения
+    const entry4Start = new Date(today.getTime() + 15.5 * 60 * 60 * 1000) // 15:30
+    await prisma.queueEntry.create({
         data: {
-            clientId: clients[1].id,
-            arrivalTime: new Date(today.getTime() + 14.75 * 60 * 60 * 1000),
-            status: LiveQueueStatus.IN_PROGRESS,
+            clientId: clients[4].id,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.CREATED,
+            requestedStartAt: entry4Start,
+            plannedStartAt: entry4Start,
+            plannedEndAt: new Date(entry4Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
             services: 'Мойка кузова',
-            price: 1500,
-            isPaid: false,
-            invitedAt: new Date(today.getTime() + 14.75 * 60 * 60 * 1000),
-            position: 1,
-            boxId: box2!.id,
+            price: 800,
+            isPaid: true,
         },
     })
 
-    // Клиенты в очереди
-    await prisma.liveQueue.createMany({
-        data: [
-            {
-                clientId: clients[7].id,
-                arrivalTime: new Date(today.getTime() + 14.33 * 60 * 60 * 1000),
-                status: LiveQueueStatus.WAITING,
-                services: 'Экспресс мойка',
-                price: 500,
-                isPaid: true,
-                position: 1,
-            },
-            {
-                clientId: clients[8].id,
-                arrivalTime: new Date(today.getTime() + 14.58 * 60 * 60 * 1000),
-                status: LiveQueueStatus.WAITING,
-                services: 'Мойка кузова, керамика',
-                price: 3000,
-                isPaid: false,
-                position: 2,
-            },
-            {
-                clientId: clients[9].id,
-                arrivalTime: new Date(today.getTime() + 14.83 * 60 * 60 * 1000),
-                status: LiveQueueStatus.WAITING,
-                services: 'Мойка кузова',
-                price: 700,
-                isPaid: false,
-                position: 3,
-            },
-        ],
+    // Запись 5: Дмитрий Смирнов - ожидает подтверждения
+    const entry5Start = new Date(today.getTime() + 16 * 60 * 60 * 1000) // 16:00
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[5].id,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.CREATED,
+            requestedStartAt: entry5Start,
+            plannedStartAt: entry5Start,
+            plannedEndAt: new Date(entry5Start.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            services: 'Нано мойка, воск',
+            price: 1800,
+            isPaid: false,
+        },
+    })
+
+    // Запись 6: Елена Волкова - VIP клиент (priority = 1)
+    const entry6Start = new Date(today.getTime() + 16.5 * 60 * 60 * 1000) // 16:30
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[6].id,
+            source: QueueEntrySource.SCHEDULED,
+            status: QueueEntryStatus.CREATED,
+            priority: 1, // VIP
+            requestedStartAt: entry6Start,
+            plannedStartAt: entry6Start,
+            plannedEndAt: new Date(entry6Start.getTime() + 45 * 60000),
+            estimatedDurationMin: 45,
+            services: 'VIP мойка + полировка',
+            price: 3500,
+            isPaid: false,
+            notes: 'Постоянный клиент, скидка 10%',
+        },
+    })
+
+    // --- Запись от админа ---
+    const adminEntryStart = new Date(today.getTime() + 17 * 60 * 60 * 1000) // 17:00
+    await prisma.queueEntry.create({
+        data: {
+            clientId: clients[7].id,
+            source: QueueEntrySource.ADMIN,
+            status: QueueEntryStatus.CONFIRMED,
+            requestedStartAt: adminEntryStart,
+            plannedStartAt: adminEntryStart,
+            plannedEndAt: new Date(adminEntryStart.getTime() + 30 * 60000),
+            estimatedDurationMin: 30,
+            checkinDeadlineAt: new Date(adminEntryStart.getTime() + 15 * 60000),
+            services: 'Мойка кузова',
+            price: 800,
+            isPaid: false,
+            notes: 'Записан по телефону',
+        },
     })
 
     // ===========================================
@@ -263,31 +346,29 @@ const main = async () => {
     // ===========================================
     console.log('🚿 Создание сессий мойки...')
 
-    const appointment1 = await prisma.appointment.findFirst({ where: { clientId: clients[0].id } })
-
-    // Активная сессия (Иван Петров - запись)
+    // Сессия 1: Иван Петров (IN_SERVICE)
     await prisma.washSession.create({
         data: {
-            boxId: box1!.id,
+            boxId: boxes[0].id,
             clientId: clients[0].id,
-            appointmentId: appointment1?.id,
-            startTime: new Date(today.getTime() + 14.5 * 60 * 60 * 1000),
-            duration: 30,
+            queueEntryId: entry2.id,
+            startTime: entry2.actualStartAt!,
             status: WashStatus.IN_PROGRESS,
             isWashed: false,
+            isPaid: true,
         },
     })
 
-    // Активная сессия (Сергей Сидоров - живая очередь)
+    // Сессия 2: Сергей Сидоров (IN_SERVICE)
     await prisma.washSession.create({
         data: {
-            boxId: box2!.id,
+            boxId: boxes[1].id,
             clientId: clients[1].id,
-            liveQueueId: live1.id,
-            startTime: new Date(today.getTime() + 14.75 * 60 * 60 * 1000),
-            duration: 30,
+            queueEntryId: live1.id,
+            startTime: live1.actualStartAt!,
             status: WashStatus.IN_PROGRESS,
             isWashed: false,
+            isPaid: false,
         },
     })
 
@@ -296,30 +377,24 @@ const main = async () => {
     // ===========================================
     console.log('📜 Создание журнала событий...')
 
-    const admin = await prisma.user.findUnique({ where: { email: 'admin@carwash.ru' } })
-
     await prisma.eventLog.createMany({
         data: [
             {
-                type: 'CLIENT_CREATED',
-                description: 'Создан новый клиент',
-                userId: admin?.id,
-                relatedType: 'Client',
-                relatedId: clients[0].id,
+                type: 'CONFIG_CREATED',
+                description: 'Создана конфигурация системы',
+                userId: adminUser.id,
             },
             {
-                type: 'APPOINTMENT_CREATED',
-                description: 'Создана новая запись',
-                userId: admin?.id,
-                relatedType: 'Appointment',
-                relatedId: (await prisma.appointment.findFirst())?.id,
+                type: 'QUEUE_ENTRY_CREATED',
+                description: 'Создана запись в очереди',
+                userId: adminUser.id,
+                relatedType: 'QueueEntry',
             },
             {
                 type: 'WASH_STARTED',
                 description: 'Начата мойка автомобиля',
-                userId: admin?.id,
+                userId: adminUser.id,
                 relatedType: 'WashSession',
-                relatedId: (await prisma.washSession.findFirst())?.id,
             },
         ],
     })
@@ -331,11 +406,23 @@ const main = async () => {
     console.log('   - Боксы:', await prisma.box.count())
     console.log('   - Пользователи:', await prisma.user.count())
     console.log('   - Клиенты:', await prisma.client.count())
-    console.log('   - Записи:', await prisma.appointment.count())
-    console.log('   - Живая очередь:', await prisma.liveQueue.count())
+    console.log('   - Записи в очереди:', await prisma.queueEntry.count())
+    console.log('     • Live:', await prisma.queueEntry.count({ where: { source: QueueEntrySource.LIVE } }))
+    console.log('     • Scheduled:', await prisma.queueEntry.count({ where: { source: QueueEntrySource.SCHEDULED } }))
+    console.log('     • Admin:', await prisma.queueEntry.count({ where: { source: QueueEntrySource.ADMIN } }))
     console.log('   - Сессии мойки:', await prisma.washSession.count())
-    console.log('   - Настройки:', await prisma.setting.count())
+    console.log('   - Конфигурации:', await prisma.systemConfig.count())
     console.log('   - События:', await prisma.eventLog.count())
+
+    // Статистика по статусам
+    const statusCounts = await prisma.queueEntry.groupBy({
+        by: ['status'],
+        _count: true,
+    })
+    console.log('\n   По статусам:')
+    statusCounts.forEach(s => {
+        console.log(`     • ${s.status}: ${s._count}`)
+    })
 
     console.log('\n✅ Заполнение завершено!')
 

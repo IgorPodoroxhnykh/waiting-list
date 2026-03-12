@@ -1,9 +1,10 @@
 // types/admin.ts
 export interface Box {
-    id: number
+    id: number | string
     number: number
     status: 'free' | 'occupied' | 'waiting'
-    clientType?: 'scheduled' | 'live'
+    clientType?: 'scheduled' | 'live' | 'admin'
+    source?: 'scheduled' | 'live' | 'admin'
     clientName?: string
     carBrand?: string
     carModel?: string
@@ -15,6 +16,7 @@ export interface Box {
     isWashed?: boolean
     price?: number
     isPaid?: boolean
+    queueEntryId?: string  // <-- добавить это поле
 }
 
 export interface Ticket {
