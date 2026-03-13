@@ -20,6 +20,13 @@ export function TicketCard({
 }: TicketCardProps) {
     const ticketType: TicketType = ticket.type === 'scheduled' ? 'appointment' : 'liveQueue'
 
+    // Проверяем изменилось ли время
+    const hasTimeShift = ticket.estimatedStartTime && ticket.estimatedStartTime !== ticket.time
+
+    // Определяем направление изменения времени
+    const isDelayed = hasTimeShift && isTimeLater(ticket.estimatedStartTime!, ticket.time)
+    const isFaster = hasTimeShift && !isDelayed
+
     return (
         <div className="bg-white rounded-lg border border-gray-200 p-3 mb-2">
             <div className="flex items-center justify-between mb-2">
@@ -41,11 +48,33 @@ export function TicketCard({
                 </div>
                 <div className="text-right">
                     <div className="font-mono font-semibold text-sm">{ticket.time}</div>
-                    <div className="text-xs text-gray-500">
-                        {ticket.type === 'scheduled' ? 'запись' : 'прибыл'}
-                    </div>
+                    {hasTimeShift ? (
+                        <div className={`text-xs font-medium ${isDelayed ? 'text-red-600' : 'text-blue-600'}`}>
+                            → ~{ticket.estimatedStartTime}
+                        </div>
+                    ) : (
+                        <div className="text-xs text-gray-500">
+                            {ticket.type === 'scheduled' ? 'запись' : 'прибыл'}
+                        </div>
+                    )}
                 </div>
             </div>
+
+            {/* Предупреждение о смене времени */}
+            {isDelayed && (
+                <div className="bg-red-50 border border-red-200 rounded-md p-2 mb-2">
+                    <div className="text-xs text-red-700">
+                        ⚠️ Время увеличено: очередь движется медленнее
+                    </div>
+                </div>
+            )}
+            {isFaster && (
+                <div className="bg-blue-50 border border-blue-200 rounded-md p-2 mb-2">
+                    <div className="text-xs text-blue-700">
+                        ⏱ Время скорректировано: очередь движется быстрее
+                    </div>
+                </div>
+            )}
 
             <div className="bg-gray-50 rounded-md p-2 mb-2">
                 <div className="flex items-center justify-between">
@@ -117,7 +146,6 @@ export function TicketCard({
                             <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
                         )}
                     </div>
-
                     {ticket.arrived && (
                         <div
                             className={`flex items-center gap-1.5 px-2 py-1 rounded-lg border-2 transition-all cursor-pointer ${ticket.inProgress
@@ -143,7 +171,6 @@ export function TicketCard({
                         </div>
                     )}
                 </div>
-
                 {ticket.boxNumber && (
                     <div className="bg-blue-100 text-blue-700 px-2 py-1 rounded-lg text-sm font-bold">
                         Бокс {ticket.boxNumber}
@@ -153,14 +180,37 @@ export function TicketCard({
 
             {!ticket.completed && (
                 <div className="flex gap-2">
-                    <Button variant="primary" size="sm" className="flex-1" onClick={() => onEdit?.(ticket.id, ticketType)}>
+                    <Button
+                        variant="primary"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => onEdit?.(ticket.id, ticketType)}
+                    >
                         Изменить
                     </Button>
-                    <Button variant="danger" size="sm" className="flex-1" onClick={() => onCancel?.(ticket.id, ticketType)}>
+                    <Button
+                        variant="danger"
+                        size="sm"
+                        className="flex-1"
+                        onClick={() => onCancel?.(ticket.id, ticketType)}
+                    >
                         Отменить
                     </Button>
                 </div>
             )}
         </div>
     )
+}
+
+/**
+ * Сравнивает два времени в формате "HH:MM"
+ * Возвращает true, если time1 позже time2
+ */
+function isTimeLater(time1: string, time2: string): boolean {
+    const parseTime = (time: string): number => {
+        const [hours, minutes] = time.split(':').map(Number)
+        return hours * 60 + minutes
+    }
+
+    return parseTime(time1) > parseTime(time2)
 }

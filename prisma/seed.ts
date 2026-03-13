@@ -1,3 +1,4 @@
+// prisma/seed.ts
 import 'dotenv/config'
 import { PrismaClient, QueueEntrySource, QueueEntryStatus, WashStatus, UserRole } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
@@ -26,7 +27,6 @@ const main = async () => {
     // ОЧИСТКА БД
     // ===========================================
     console.log('🧹 Очистка базы данных...')
-
     await prisma.$transaction([
         prisma.notification.deleteMany(),
         prisma.washSession.deleteMany(),
@@ -37,14 +37,12 @@ const main = async () => {
         prisma.client.deleteMany(),
         prisma.box.deleteMany(),
     ])
-
     console.log('✅ База данных очищена\n')
 
     // ===========================================
     // БОКСЫ
     // ===========================================
     console.log('🚧 Создание боксов...')
-
     await prisma.box.createMany({
         data: [
             { number: 1, isActive: true },
@@ -54,12 +52,12 @@ const main = async () => {
             { number: 5, isActive: true },
         ],
     })
+    const boxes = await prisma.box.findMany({ orderBy: { number: 'asc' } })
 
     // ===========================================
     // ПОЛЬЗОВАТЕЛИ
     // ===========================================
     console.log('👤 Создание пользователей...')
-
     const adminUser = await prisma.user.create({
         data: {
             email: 'admin@carwash.ru',
@@ -82,7 +80,6 @@ const main = async () => {
     // КОНФИГУРАЦИЯ СИСТЕМЫ
     // ===========================================
     console.log('⚙️  Создание конфигурации...')
-
     await prisma.systemConfig.create({
         data: {
             effectiveFrom: new Date(),
@@ -103,20 +100,38 @@ const main = async () => {
     // ===========================================
     console.log('👥 Создание клиентов...')
 
-    const clients = await prisma.client.createManyAndReturn({
-        data: [
-            { name: 'Иван Петров', phone: '+7 999 111-22-33', carNumber: 'А777АА', carBrand: 'Toyota', carModel: 'Camry', carColor: 'Чёрный' },
-            { name: 'Сергей Сидоров', phone: '+7 999 222-33-44', carNumber: 'В555ОР', carBrand: 'BMW', carModel: 'X5', carColor: 'Белый' },
-            { name: 'Николай Морозов', phone: '+7 918 222-33-44', carNumber: 'Н555НН', carBrand: 'Kia', carModel: 'Optima', carColor: 'Синий' },
-            { name: 'Алексей Иванов', phone: '+7 999 123-45-67', carNumber: 'С333СК', carBrand: 'Hyundai', carModel: 'Solaris', carColor: 'Серебристый' },
-            { name: 'Мария Козлова', phone: '+7 987 654-32-10', carNumber: 'К555КК', carBrand: 'Volkswagen', carModel: 'Polo', carColor: 'Белый' },
-            { name: 'Дмитрий Смирнов', phone: '+7 912 345-67-89', carNumber: 'М777ММ', carBrand: 'Lada', carModel: 'Vesta', carColor: 'Красный' },
-            { name: 'Елена Волкова', phone: '+7 905 111-22-33', carNumber: 'Е123ЕЕ', carBrand: 'Renault', carModel: 'Duster', carColor: 'Зелёный' },
-            { name: 'Пётр Новиков', phone: '+7 917 333-44-55', carNumber: 'О777ОО', carBrand: 'Toyota', carModel: 'Corolla', carColor: 'Серый' },
-            { name: 'Анна Соколова', phone: '+7 920 444-55-66', carNumber: 'А555АА', carBrand: 'Honda', carModel: 'Civic', carColor: 'Чёрный' },
-            { name: 'Виктор Кузнецов', phone: '+7 921 555-66-77', carNumber: 'В888ВВ', carBrand: 'Nissan', carModel: 'Almera', carColor: 'Синий' },
-        ],
-    })
+    const clients = await Promise.all([
+        prisma.client.create({
+            data: { name: 'Иван Петров', phone: '+7 999 111-22-33', carNumber: 'А777АА', carBrand: 'Toyota', carModel: 'Camry', carColor: 'Чёрный' },
+        }),
+        prisma.client.create({
+            data: { name: 'Сергей Сидоров', phone: '+7 999 222-33-44', carNumber: 'В555ОР', carBrand: 'BMW', carModel: 'X5', carColor: 'Белый' },
+        }),
+        prisma.client.create({
+            data: { name: 'Николай Морозов', phone: '+7 918 222-33-44', carNumber: 'Н555НН', carBrand: 'Kia', carModel: 'Optima', carColor: 'Синий' },
+        }),
+        prisma.client.create({
+            data: { name: 'Алексей Иванов', phone: '+7 999 123-45-67', carNumber: 'С333СК', carBrand: 'Hyundai', carModel: 'Solaris', carColor: 'Серебристый' },
+        }),
+        prisma.client.create({
+            data: { name: 'Мария Козлова', phone: '+7 987 654-32-10', carNumber: 'К555КК', carBrand: 'Volkswagen', carModel: 'Polo', carColor: 'Белый' },
+        }),
+        prisma.client.create({
+            data: { name: 'Дмитрий Смирнов', phone: '+7 912 345-67-89', carNumber: 'М777ММ', carBrand: 'Lada', carModel: 'Vesta', carColor: 'Красный' },
+        }),
+        prisma.client.create({
+            data: { name: 'Елена Волкова', phone: '+7 905 111-22-33', carNumber: 'Е123ЕЕ', carBrand: 'Renault', carModel: 'Duster', carColor: 'Зелёный' },
+        }),
+        prisma.client.create({
+            data: { name: 'Пётр Новиков', phone: '+7 917 333-44-55', carNumber: 'О777ОО', carBrand: 'Toyota', carModel: 'Corolla', carColor: 'Серый' },
+        }),
+        prisma.client.create({
+            data: { name: 'Анна Соколова', phone: '+7 920 444-55-66', carNumber: 'А555АА', carBrand: 'Honda', carModel: 'Civic', carColor: 'Чёрный' },
+        }),
+        prisma.client.create({
+            data: { name: 'Виктор Кузнецов', phone: '+7 921 555-66-77', carNumber: 'В888ВВ', carBrand: 'Nissan', carModel: 'Almera', carColor: 'Синий' },
+        }),
+    ])
 
     // ===========================================
     // ЗАПИСИ В ЕДИНОЙ ОЧЕРЕДИ (QueueEntry)
@@ -127,11 +142,8 @@ const main = async () => {
     const today = new Date(now)
     today.setHours(0, 0, 0, 0)
 
-    const boxes = await prisma.box.findMany({ orderBy: { number: 'asc' } })
-
     // --- Завершённые записи (SCHEDULED) ---
-
-    // Запись 1: Николай Морозов - завершено
+    // Запись 1: Николай Морозов - завершено сегодня в 10:00
     const entry1Start = new Date(today.getTime() + 10 * 60 * 60 * 1000) // 10:00
     await prisma.queueEntry.create({
         data: {
@@ -144,6 +156,7 @@ const main = async () => {
             estimatedDurationMin: 30,
             actualStartAt: entry1Start,
             actualEndAt: new Date(entry1Start.getTime() + 28 * 60000),
+            actualDurationMin: 28,
             services: 'Мойка кузова, коврики',
             price: 1200,
             isPaid: true,
@@ -172,7 +185,6 @@ const main = async () => {
     })
 
     // --- Live очередь ---
-
     // Live 1: Сергей Сидоров - в процессе мойки
     const live1Start = new Date(now.getTime() - 10 * 60000)
     const live1 = await prisma.queueEntry.create({
@@ -195,18 +207,18 @@ const main = async () => {
     })
 
     // Live 2: Пётр Новиков - следующий в очереди (CONFIRMED)
-    const live2Planned = new Date(now.getTime() + 15 * 60000) // через 15 мин
+    // ETA будет рассчитан автоматически на основе текущей загрузки
     await prisma.queueEntry.create({
         data: {
             clientId: clients[7].id,
             source: QueueEntrySource.LIVE,
             status: QueueEntryStatus.CONFIRMED,
             priority: 0,
-            requestedStartAt: new Date(now.getTime() - 10 * 60000),
-            plannedStartAt: live2Planned,
-            plannedEndAt: new Date(live2Planned.getTime() + 30 * 60000),
+            requestedStartAt: new Date(now.getTime() - 10 * 60000), // пришёл 10 мин назад
+            plannedStartAt: new Date(now.getTime() + 5 * 60000), // примерное время (будет скорректировано в UI)
+            plannedEndAt: new Date(now.getTime() + 35 * 60000),
             estimatedDurationMin: 30,
-            checkinDeadlineAt: new Date(live2Planned.getTime() + 15 * 60000),
+            checkinDeadlineAt: new Date(now.getTime() + 20 * 60000),
             services: 'Экспресс мойка',
             price: 500,
             isPaid: true,
@@ -214,16 +226,15 @@ const main = async () => {
     })
 
     // Live 3: Анна Соколова - в очереди (CREATED)
-    const live3Planned = new Date(now.getTime() + 45 * 60000) // через 45 мин
     await prisma.queueEntry.create({
         data: {
             clientId: clients[8].id,
             source: QueueEntrySource.LIVE,
             status: QueueEntryStatus.CREATED,
             priority: 0,
-            requestedStartAt: new Date(now.getTime() - 5 * 60000),
-            plannedStartAt: live3Planned,
-            plannedEndAt: new Date(live3Planned.getTime() + 30 * 60000),
+            requestedStartAt: new Date(now.getTime() - 5 * 60000), // пришёл 5 мин назад
+            plannedStartAt: new Date(now.getTime() + 35 * 60000), // примерное время
+            plannedEndAt: new Date(now.getTime() + 65 * 60000),
             estimatedDurationMin: 30,
             services: 'Мойка кузова, керамика',
             price: 3000,
@@ -232,16 +243,15 @@ const main = async () => {
     })
 
     // Live 4: Виктор Кузнецов - в очереди (CREATED)
-    const live4Planned = new Date(now.getTime() + 75 * 60000) // через 1ч 15мин
     await prisma.queueEntry.create({
         data: {
             clientId: clients[9].id,
             source: QueueEntrySource.LIVE,
             status: QueueEntryStatus.CREATED,
             priority: 0,
-            requestedStartAt: new Date(now.getTime() - 2 * 60000),
-            plannedStartAt: live4Planned,
-            plannedEndAt: new Date(live4Planned.getTime() + 30 * 60000),
+            requestedStartAt: new Date(now.getTime() - 2 * 60000), // пришёл 2 мин назад
+            plannedStartAt: new Date(now.getTime() + 65 * 60000), // примерное время
+            plannedEndAt: new Date(now.getTime() + 95 * 60000),
             estimatedDurationMin: 30,
             services: 'Мойка кузова',
             price: 700,
@@ -250,8 +260,7 @@ const main = async () => {
     })
 
     // --- Предварительные записи (SCHEDULED) на сегодня ---
-
-    // Запись 3: Алексей Иванов - подтверждённая запись на сегодня
+    // Запись 3: Алексей Иванов - подтверждённая запись на 15:00
     const entry3Start = new Date(today.getTime() + 15 * 60 * 60 * 1000) // 15:00
     await prisma.queueEntry.create({
         data: {
@@ -269,7 +278,7 @@ const main = async () => {
         },
     })
 
-    // Запись 4: Мария Козлова - ожидает подтверждения
+    // Запись 4: Мария Козлова - ожидает подтверждения на 15:30
     const entry4Start = new Date(today.getTime() + 15.5 * 60 * 60 * 1000) // 15:30
     await prisma.queueEntry.create({
         data: {
@@ -286,7 +295,7 @@ const main = async () => {
         },
     })
 
-    // Запись 5: Дмитрий Смирнов - ожидает подтверждения
+    // Запись 5: Дмитрий Смирнов - на 16:00
     const entry5Start = new Date(today.getTime() + 16 * 60 * 60 * 1000) // 16:00
     await prisma.queueEntry.create({
         data: {
@@ -303,7 +312,7 @@ const main = async () => {
         },
     })
 
-    // Запись 6: Елена Волкова - VIP клиент (priority = 1)
+    // Запись 6: Елена Волкова - VIP клиент (priority = 1) на 16:30
     const entry6Start = new Date(today.getTime() + 16.5 * 60 * 60 * 1000) // 16:30
     await prisma.queueEntry.create({
         data: {
@@ -376,7 +385,6 @@ const main = async () => {
     // ЖУРНАЛ СОБЫТИЙ
     // ===========================================
     console.log('📜 Создание журнала событий...')
-
     await prisma.eventLog.createMany({
         data: [
             {
@@ -420,12 +428,11 @@ const main = async () => {
         _count: true,
     })
     console.log('\n   По статусам:')
-    statusCounts.forEach(s => {
+    statusCounts.forEach((s) => {
         console.log(`     • ${s.status}: ${s._count}`)
     })
 
     console.log('\n✅ Заполнение завершено!')
-
     await prisma.$disconnect()
 }
 

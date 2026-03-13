@@ -23,15 +23,12 @@ export default function AdminPage() {
     const [data, setData] = useState<AdminData | null>(null)
     const [loading, setLoading] = useState(true)
     const [filter, setFilter] = useState<'all' | 'scheduled' | 'live'>('all')
-
     const [settingsOpen, setSettingsOpen] = useState(false)
     const [addModalOpen, setAddModalOpen] = useState(false)
     const [editModalOpen, setEditModalOpen] = useState(false)
     const [deleteModalOpen, setDeleteModalOpen] = useState(false)
-
     const [editingTicket, setEditingTicket] = useState<Ticket | null>(null)
     const [editType, setEditType] = useState<TicketType>('appointment')
-
     const [deletingTicket, setDeletingTicket] = useState<{
         id: number
         type: TicketType
@@ -97,7 +94,6 @@ export default function AdminPage() {
 
     const handleSaveEdit = async (formData: Partial<Ticket>) => {
         if (!editingTicket) return
-
         const result = await updateTicket(editType, editingTicket.id, formData)
         if (result.success) {
             setEditModalOpen(false)
@@ -121,7 +117,6 @@ export default function AdminPage() {
 
     const handleConfirmDelete = async () => {
         if (!deletingTicket) return
-
         const result = await deleteTicket(deletingTicket.type, deletingTicket.id)
         if (result.success) {
             setDeleteModalOpen(false)
@@ -133,10 +128,21 @@ export default function AdminPage() {
     }
 
     const freeBoxes = data?.boxes.filter((b) => b.status === 'free').length ?? 0
-    const allTickets = [...(data?.appointments ?? []), ...(data?.liveQueue ?? [])]
+
+    // Объединяем и сортируем по времени
+    const allTickets = [...(data?.appointments ?? []), ...(data?.liveQueue ?? [])].sort((a, b) => {
+        const parseTime = (time: string): number => {
+            const [hours, minutes] = time.split(':').map(Number)
+            return hours * 60 + minutes
+        }
+        return parseTime(a.time) - parseTime(b.time)
+    })
+
     const inLiveQueue = allTickets.filter((t) => t.type === 'live' && !t.completed).length
     const nextScheduled = allTickets.find((t) => t.type === 'scheduled' && !t.completed)
-    const estimatedWait = 40
+
+    // Используем статистику с бэкенда если есть
+    const estimatedWait = data?.stats?.inService ?? 0
 
     const currentTime = new Date().toLocaleTimeString('ru-RU', {
         hour: '2-digit',
@@ -189,7 +195,6 @@ export default function AdminPage() {
                             </div>
                         </div>
                     </div>
-
                     <div className="grid grid-cols-4 gap-2 mt-2">
                         <StatCard value={freeBoxes} label="Свободно" color="green" />
                         <StatCard value={inLiveQueue} label="В очереди" color="orange" />
@@ -245,20 +250,19 @@ export default function AdminPage() {
                 open={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
                 settings={settings}
+                onSuccess={loadData}
             />
-
             <AddClientModal
                 open={addModalOpen}
                 onClose={() => setAddModalOpen(false)}
+                onSuccess={loadData}
             />
-
             <EditClientModal
                 open={editModalOpen}
                 onClose={() => setEditModalOpen(false)}
                 ticket={editingTicket}
                 onSave={handleSaveEdit}
             />
-
             <DeleteConfirmModal
                 open={deleteModalOpen}
                 onClose={() => {
@@ -288,7 +292,6 @@ function StatCard({
         blue: 'bg-blue-50 border-blue-200 text-blue-600 text-blue-600',
     }
     const [bg, border, textValue, textLabel] = colors[color].split(' ')
-
     return (
         <div className={`${bg} rounded-lg p-2 text-center border ${border} flex flex-col justify-center`}>
             <div className={`text-lg sm:text-xl font-bold ${textValue}`}>{value}</div>

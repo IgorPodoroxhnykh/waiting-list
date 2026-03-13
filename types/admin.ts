@@ -16,13 +16,14 @@ export interface Box {
     isWashed?: boolean
     price?: number
     isPaid?: boolean
-    queueEntryId?: string  // <-- добавить это поле
+    queueEntryId?: string
 }
 
 export interface Ticket {
     id: number
     type: 'scheduled' | 'live'
     time: string
+    estimatedStartTime?: string  // Добавить
     clientName: string
     phone: string
     carBrand: string
@@ -37,7 +38,6 @@ export interface Ticket {
     completed: boolean
     boxNumber?: number
     position?: number
-    estimatedStartTime?: string
 }
 
 export interface Settings {
@@ -48,11 +48,22 @@ export interface Settings {
     workEnd: string
 }
 
+export interface AdminStats {
+    totalInQueue: number
+    liveCount: number
+    scheduledCount: number
+    adminCount: number
+    completedToday: number
+    inService: number
+    freeBoxes: number
+}
+
 export interface AdminData {
     boxes: Box[]
     appointments: Ticket[]
     liveQueue: Ticket[]
     settings: Settings
+    stats?: AdminStats
 }
 
 export type TicketType = 'appointment' | 'liveQueue'

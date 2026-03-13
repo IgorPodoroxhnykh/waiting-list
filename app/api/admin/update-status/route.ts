@@ -1,9 +1,9 @@
 // app/api/admin/update-status/route.ts
-
 import { NextResponse } from 'next/server'
-import { PrismaClient, QueueEntryStatus, WashStatus } from '@prisma/client'
+import { PrismaClient, QueueEntryStatus, WashStatus, QueueEntrySource } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import pg from 'pg'
+import { getActiveConfig, addMinutes } from '@/lib/scheduler'
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
 
@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     try {
         const body = await request.json()
         const { type, id, field, value } = body
+
         console.log('Received:', { type, id, field, value })
 
         // ===========================================
@@ -75,13 +76,11 @@ export async function POST(request: Request) {
         // ===========================================
         if (field === 'arrived') {
             const entry = await prisma.queueEntry.findUnique({ where: { id } })
-
             if (!entry) {
                 return NextResponse.json({ error: 'Запись не найдена' }, { status: 404 })
             }
 
             const newStatus = value ? QueueEntryStatus.CHECKED_IN : QueueEntryStatus.CONFIRMED
-
             await prisma.queueEntry.update({
                 where: { id },
                 data: {
@@ -189,8 +188,6 @@ export async function POST(request: Request) {
         // 4. ПОМЫТ (локальное состояние UI, не сохраняем в БД)
         // ===========================================
         if (field === 'isWashed') {
-            // Это предохранитель перед "Завершить"
-            // Состояние хранится в UI, в БД не сохраняем
             console.log('isWashed toggled in UI:', value)
             return NextResponse.json({ success: true })
         }
@@ -202,17 +199,13 @@ export async function POST(request: Request) {
             let session = null
 
             if (type === 'washSession') {
-                // Пробуем найти как сессию по id
                 session = await prisma.washSession.findUnique({ where: { id } })
-
-                // Если не нашли - значит передали queueEntryId
                 if (!session) {
                     session = await prisma.washSession.findFirst({
                         where: { queueEntryId: id }
                     })
                 }
             } else {
-                // Ищем сессию по queueEntryId
                 session = await prisma.washSession.findFirst({
                     where: { queueEntryId: id }
                 })
@@ -236,7 +229,7 @@ export async function POST(request: Request) {
                 }
             })
 
-            // Обновляем запись (с проверкой на null)
+            // Обновляем запись
             if (session.queueEntryId) {
                 await prisma.queueEntry.update({
                     where: { id: session.queueEntryId },
@@ -259,9 +252,60 @@ export async function POST(request: Request) {
             })
 
             console.log('Wash completed, duration:', duration, 'min')
+
+            // ===========================================
+            // АВТОМАТИЧЕСКИЙ ЗАПУСК СЛЕДУЮЩЕГО КЛИЕНТА
+            // ===========================================
+            const config = await getActiveConfig()
+
+            // Получаем кандидатов на запуск
+            const candidates = await prisma.queueEntry.findMany({
+                where: {
+                    status: { in: [QueueEntryStatus.CHECKED_IN, QueueEntryStatus.CONFIRMED] },
+                    plannedStartAt: { lte: addMinutes(now, 30) }
+                },
+                include: { client: true },
+                orderBy: [
+                    { priority: 'desc' },
+                    { source: 'asc' },
+                    { plannedStartAt: 'asc' },
+                    { createdAt: 'asc' }
+                ]
+            })
+
+            // Проверяем, свободен ли бокс
+            const boxStillBusy = await prisma.washSession.findFirst({
+                where: {
+                    boxId: session.boxId,
+                    status: WashStatus.IN_PROGRESS
+                }
+            })
+
+            let autoStarted = null
+
+            if (!boxStillBusy && candidates.length > 0) {
+                const nextCandidate = candidates[0]
+
+                // Проверяем grace period для SCHEDULED
+                if (nextCandidate.source === QueueEntrySource.SCHEDULED) {
+                    const deadline = addMinutes(nextCandidate.plannedStartAt, config.noShowGraceMin)
+                    if (now < nextCandidate.plannedStartAt && now < deadline) {
+                        // Ещё рано, не запускаем
+                        console.log('Next candidate is SCHEDULED but too early')
+                    } else {
+                        // Запускаем
+                        autoStarted = await startNextWash(prisma, nextCandidate, session.boxId, now)
+                    }
+                } else {
+                    // LIVE - запускаем сразу
+                    autoStarted = await startNextWash(prisma, nextCandidate, session.boxId, now)
+                }
+            }
+
             return NextResponse.json({
                 success: true,
-                duration
+                duration,
+                autoStarted
             })
         }
 
@@ -303,7 +347,6 @@ export async function POST(request: Request) {
                 where: { id },
                 data: { priority: value }
             })
-
             console.log('Updated priority:', value)
             return NextResponse.json({ success: true })
         }
@@ -319,5 +362,56 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: errMsg }, { status: 500 })
     } finally {
         await prisma.$disconnect()
+    }
+}
+
+/**
+ * Запускает мойку для следующего клиента
+ */
+async function startNextWash(
+    prisma: PrismaClient,
+    candidate: any,
+    boxId: string,
+    now: Date
+) {
+    // Создаём сессию
+    const newSession = await prisma.washSession.create({
+        data: {
+            boxId: boxId,
+            clientId: candidate.clientId,
+            queueEntryId: candidate.id,
+            startTime: now,
+            status: WashStatus.IN_PROGRESS,
+            isWashed: false,
+            isPaid: candidate.isPaid
+        }
+    })
+
+    // Обновляем статус записи
+    await prisma.queueEntry.update({
+        where: { id: candidate.id },
+        data: {
+            status: QueueEntryStatus.IN_SERVICE,
+            actualStartAt: now,
+            boxId: boxId
+        }
+    })
+
+    // Логируем
+    await prisma.eventLog.create({
+        data: {
+            type: 'WASH_AUTO_STARTED',
+            description: `Автозапуск мойки: ${candidate.client?.name}`,
+            relatedId: candidate.id,
+            relatedType: 'QueueEntry'
+        }
+    })
+
+    console.log('Auto-started wash for:', candidate.client?.name)
+
+    return {
+        entryId: candidate.id,
+        sessionId: newSession.id,
+        clientName: candidate.client?.name
     }
 }
